@@ -1,0 +1,48 @@
+1. 가상환경 생성 및 활성화:
+# 1. 'mpm_env'라는 이름으로 파이썬 3.10 환경 만들기 (-y는 질문에 무조건 yes 하라는 뜻)
+conda create -n mpm_env python=3.10 -y
+
+# 2. 방금 만든 환경 안으로 들어가기 (활성화)
+conda activate mpm_env
+
+2. warp 및 기타 도구 설치
+pip install warp-lang numpy matplotlib pyyaml
+
+3. ls 명령어 사용 혹은 파일 탐색기 이용
+dir 입력 / start . (현재 탐색기창이 열림)
+
+4. 파일 실행
+python main.py --> 기본 yaml 파일인 indentation.yaml 사용
+python main.py --config input/test2.yaml --> test2.yaml 사용
+
+5. 전체 프로젝트 아키텍쳐
+mpm_project/
+│
+├── input/                  # 시나리오 설정 파일 저장소
+│   └── indentation.yaml    # (입력) 시뮬레이션 설정 파일
+│
+├── src/                    # 소스 코드 모듈
+│   ├── __init__.py         # (빈 파일) 파이썬 패키지 인식용
+│   ├── data_types.py        # [변경] 3D Struct
+│   ├── kernels.py           # [변경] 3D 커널 및 BC 적용
+│   ├── scene.py             # [변경] 3D 입자 배치 및 Height Map
+│   ├── solver.py            # [변경] 3D 솔버 로직
+│   └── utils.py             # [변경] 3D Plotting 및 GIF 생성
+│
+└── main.py                  # 메인 실행 파일
+
+(수정이전의 아키텍쳐)
+mpm_project/
+│
+├── input/                  # 시나리오 설정 파일 저장소
+│   └── indentation.yaml    # (입력) 시뮬레이션 설정 파일
+│
+├── src/                    # 소스 코드 모듈
+│   ├── __init__.py         # (빈 파일) 파이썬 패키지 인식용
+│   ├── data_types.py       # Warp Struct(입자, 그리드) 정의
+│   ├── kernels.py          # 물리 연산 (커널) 모음
+│   ├── scene.py            # 입자 배치 및 생성 (SceneGenerator)
+│   ├── solver.py           # MPMSolver 클래스 (Explicit/Implicit 로직)
+│   └── utils.py            # 시각화 및 잡다한 도구
+│
+└── main.py                 # 실행 파일 (Entry Point)

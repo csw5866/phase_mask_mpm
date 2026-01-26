@@ -1,0 +1,29 @@
+# Simulation Configuration
+device: "cpu"
+# [핵심] 고해상도 그리드 및 조밀한 입자 설정
+res: [64, 64, 64]
+spacing: 0.01         # 입자 간격을 매우 좁혀서 밀도를 높임 (가장 중요)
+dt: 5e-5              # 입자가 작아진 만큼 타임스텝도 줄여야 안정적
+
+frame_count: 400
+gravity: [0, 0, 0]
+
+# Material (PDMS-like)
+youngs_modulus: 1e5   # 밀도가 높아져서 강성을 조금 높여도 됨
+poisson_ratio: 0.4    # 고무에 가까운 거동을 위해 높임 (비압축성 근사)
+density: 1000.0
+
+# Geometry
+block_min: [0.3, 0.05, 0.3]
+block_max: [0.7, 0.25, 0.7] # 블록 높이를 조금 낮춤
+
+# Indenter (Kinematic Rigid)
+indenter:
+  center: [0.5, 0.28, 0.5] # 블록 바로 위에서 시작
+  radius: 0.08
+  velocity: [0, -0.25, 0] # 적절한 속도로 압입
+
+# Visualization
+output_dir: "output"
+save_gif: true
+show_window: true
