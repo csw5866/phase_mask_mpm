@@ -46,3 +46,33 @@ mpm_project/
 │   └── utils.py            # 시각화 및 잡다한 도구
 │
 └── main.py                 # 실행 파일 (Entry Point)
+
+1번과 3번을 추가해줘. 그리고 모든 코드는 indentation.yaml의 device가 cpu나 cuda:0일 때 compatible하게 작성되어야 해. cpu에서 돌아가기만 하거나, gpu에서만 돌아갈 수 있는 코드 말고.
+
+6. explicit_mpm 구현 세부사항
+&&tachi 2.0의 SVD 이용 방식과 SVD 없는 방식의 차이
+(1) SVD 이용
+F=U(sigma)V.T일 때, U와 V는 pure rotation이다.
+J = diagonal of (sigma)의 곱 으로 정의	(sigma는 stretch term)
+--> Corotated model 이용
+psi = mu* abs(F-R).^2 + lambda/2*(J-1)^2
+stress = 2*mu*(F- U* V.T)*F.T + I*lambda*J*(J-1)
+
+(2)
+Neo-Hookean에너지 -> implicit이나 FEM에서는 사용하나 explicit에서는 inv_F와 log(J) term이 explode할 수 있어서 (1)방식을 실전에서 주로 이용
+P = mu(F -inv_F_T)+lambda*log(J)*inv_F_T
+
+7. flat profile이 아닐 때 -> SDF(signed distance function)을 이용	or CAD의 STL 이나 OBJ 파일 기반으로 particle 배치
+(1) 균일한 spacing의 particle 배치 -->> SDF 기반 구조물 외부의 particle은 제거.
+(2)CAD 기반 입자 생성 로직: 정규 격자 샘플링CAD 메쉬(Surface Mesh)는 껍데기 정보만 있고 속은 비어 있습니다. 이를 균일한 밀도의 입자로 채우기 위해서는 다음 과정을 거칩니다.
+	~메쉬 로드: trimesh 라이브러리 등을 사용해 STL 파일을 불러옵니다.
+	~바운딩 박스 생성: 모델을 완전히 감싸는 최소 크기의 직육면체 범위를 계산합니다.
+	~정규 그리드 생성: 이 박스 안을 시뮬레이션의 spacing 간격으로 촘촘하게 쪼개어 후보 점들을 만듭니다.
+	~내부 판정 (In/Out Test): 각 점이 CAD 메쉬의 안쪽에 있는지 확인합니다.이때 모든 후보 점은 동일한 그리드($spacing$) 위에서 생성되므로, 어느 부위를 	잘라보아도 단위 부피당 입자 수는 수학적으로 완벽하게 동일합니다.
+
+*계단 현상(곡면이 particle로 표현하며 계단화되는 것)을 보완하기 위해 Quadratic Spline등 입자-그리드 고차원 보간 필요
+**질량의 총합 확인, 즉 V_CAD = N * (spacing)^3 이 대략적으로 성립하는지 확인하기.
+
+
+
+

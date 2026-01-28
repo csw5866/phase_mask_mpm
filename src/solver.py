@@ -1,46 +1,87 @@
 import warp as wp
-from .kernels import p2g_kernel, grid_update_kernel, g2p_kernel
-from .data_types import ParticleState
+from .kernels import *
+from .scene import create_block
+from .utils import *
 
 class MPMSolver:
-    def __init__(self, config, e_pos, i_pos, mu, lam):
-        self.dt, self.dx = float(config['dt']), 1.0 / float(config['res'][0])
-        self.mu, self.lam = float(mu), float(lam)
-        self.gravity = wp.vec3(0.0, 0.0, 0.0)
-        
-        # [수정] Attribute 이름 일치 확인
-        self.num_elastomer = len(e_pos)
-        self.num_particles = self.num_elastomer + len(i_pos)
-        self.v_rigid = wp.vec3(*config['indenter']['velocity'])
-        
-        self.p = wp.array(dtype=ParticleState, shape=self.num_particles)
-        self.grid_m = wp.zeros(shape=config['res'], dtype=wp.float32)
-        self.grid_v = wp.zeros(shape=config['res'], dtype=wp.vec3)
-        
-        vol = float(config['spacing']**3)
-        mass = vol * float(config['density'])
-        p_structs = []
-        
-        for pos in e_pos:
-            p_obj = ParticleState()
-            p_obj.x, p_obj.v = wp.vec3(*pos), wp.vec3(0.0)
-            p_obj.F = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-            p_obj.C, p_obj.m, p_obj.vol, p_obj.mat_id = wp.mat33(0.0), mass, vol, 0
-            p_structs.append(p_obj)
-            
-        for pos in i_pos:
-            p_obj = ParticleState()
-            p_obj.x, p_obj.v = wp.vec3(*pos), self.v_rigid
-            p_obj.F, p_obj.C = wp.mat33(0.0), wp.mat33(0.0)
-            p_obj.m, p_obj.vol, p_obj.mat_id = mass * 200.0, vol, 1
-            p_structs.append(p_obj)
-            
-        self.p.assign(p_structs)
+    def __init__(self, cfg):
+        #self.spacing = float(cfg["spacing"])
+        self.dt = float(cfg["dt"])
+        self.step_count = 0
+
+        self.nx = int(cfg["grid_res"][0])
+        self.ny = int(cfg["grid_res"][1])
+        self.nz = int(cfg["grid_res"][2])
+        self.grid_size = self.nx * self.ny * self.nz
+        self.block_min = np.array(cfg["block_min"])
+        self.block_max = np.array(cfg["block_max"])
+        self.dx = 1.0 / (self.nx - 1)     #self.nx = slef.ny = self.nz이고 domain은 정육면체 형태 ([0, 1.0]^3)
+        self.spacing = self.dx / 3
+        self.inv_dx = 1.0 / self.dx
+        self.indenter = cfg["indenter"]
+        self.density = float(cfg["density"])
+
+        E = float(cfg["E"])
+        nu = float(cfg["nu"])
+        self.mu = E / (2 * (1 + nu))
+        self.lam = E * nu / ((1 + nu) * (1 - 2 * nu))
+
+        parts = create_block(
+            self.block_min,
+            self.block_max,
+            self.spacing,
+            self.density,
+            self.indenter,
+        )
+
+        self.particles = wp.array(parts, dtype=Particle)
+        self.np = len(parts)
+        self.grid_v = wp.zeros(self.grid_size, dtype=wp.vec3)
+        self.grid_m = wp.zeros(self.grid_size, dtype=float)
+
+        self.gravity = wp.vec3(*cfg["gravity"])
 
     def step(self):
-        self.grid_m.zero_()
-        self.grid_v.zero_()
-        # [수정] 커널 인자 개수 동기화
-        wp.launch(p2g_kernel, dim=self.num_particles, inputs=[self.p, self.grid_m, self.grid_v, self.dx, self.mu, self.lam, self.num_elastomer])
-        wp.launch(grid_update_kernel, dim=self.grid_m.shape, inputs=[self.grid_m, self.grid_v, self.dt, self.gravity])
-        wp.launch(g2p_kernel, dim=self.num_particles, inputs=[self.p, self.grid_v, self.dt, self.dx, self.num_elastomer, self.v_rigid])
+        if self.step_count == 0:
+            hmap = compute_height_map(self.particles,self.nx,self.nz)
+            save_height_map(hmap, self.step_count)
+            save_height_map_3d(hmap, self.step_count)
+
+
+        wp.launch(clear_grid, self.grid_size, [self.grid_v, self.grid_m])
+
+        wp.launch(p2g, self.np, [
+            self.particles, self.grid_v, self.grid_m,
+            self.dx, self.inv_dx, self.dt,
+            self.mu, self.lam,
+            self.nx, self.ny, self.nz
+        ])
+
+        wp.launch(grid_update, self.grid_size, [
+            self.grid_v, self.grid_m,
+            self.gravity, self.dt,self.dx,
+            wp.vec3(self.block_min[0],self.block_min[1],self.block_min[2]),
+            wp.vec3(self.block_max[0],self.block_max[1],self.block_max[2]),
+            self.nx, self.ny, self.nz
+        ])
+
+        wp.launch(g2p, self.np, [
+            self.particles, self.grid_v, self.grid_m, wp.vec3(*np.array(self.indenter["velocity"])),
+            self.dx, self.inv_dx, self.dt,
+            self.nx, self.ny, self.nz
+        ])
+
+        self.step_count += 1
+
+        if self.step_count % 10 == 0 or self.step_count < 10 :
+            x = self.particles.numpy()["x"]
+            if not np.all(np.isfinite(x)):
+                print("NaN detected at step", self.step_count)
+                return
+            print(f"[MPM] Step {self.step_count}")
+            save_particle_frame(self.particles, self.step_count)
+            hmap = compute_height_map(self.particles, self.nx, self.nz)
+            save_height_map(hmap, self.step_count)
+            save_height_map_3d(hmap, self.step_count)
+            save_height_map_3d_with_indenter(self.particles,hmap, self.step_count)
+            save_height_map_3d_surface_indenter(self.particles,hmap, self.step_count)

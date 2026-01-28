@@ -1,34 +1,68 @@
 import numpy as np
 import warp as wp
+from .data_types import Particle
 
-def setup_scene(config):
-    # 1. 엘라스토머 입자 생성 (Material ID: 0)
-    b_min, b_max, sp = np.array(config['block_min']), np.array(config['block_max']), config['spacing']
-    x, y, z = np.arange(b_min[0], b_max[0], sp), np.arange(b_min[1], b_max[1], sp), np.arange(b_min[2], b_max[2], sp)
-    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
-    elastomer_pos = np.stack([X.flatten(), Y.flatten(), Z.flatten()], axis=-1).astype(np.float32)
+def create_block(block_min, block_max, spacing, density, ind_cfg):
+    particles = []
+
+    cell_volume = spacing ** 3
+    p_volume = cell_volume
+    p_mass = density * p_volume
+
+    nx = int((block_max[0] - block_min[0]) / spacing) + 1
+    ny = int((block_max[1] - block_min[1]) / spacing) + 1
+    nz = int((block_max[2] - block_min[2]) / spacing) + 1
+
+    for i in range(nx):
+        for j in range(ny):
+            for k in range(nz):
+                x = block_min + spacing * np.array([i, j, k])
+
+                p = Particle()
+                p.x = wp.vec3(*x)
+                p.v = wp.vec3(0.0, 0.0, 0.0)
+                p.F = wp.mat33(1.0, 0.0, 0.0, 
+                               0.0, 1.0, 0.0,
+                               0.0, 0.0, 1.0)
+                p.C = wp.mat33(0.0)
+                p.mass = p_mass
+                p.volume = p_volume
+                p.mat_id = 0
+
+                particles.append(p)
     
-    # 2. 인덴터 입자 생성 (Material ID: 1 - Rigid)
-    ind_cfg = config['indenter']
+# --- 2. Indenter Particles (mat_id: 1) ---
     ind_center = np.array(ind_cfg['center'])
     ind_radius = float(ind_cfg['radius'])
+    indenter_v = np.array(ind_cfg['velocity'])
     
-    # 인덴터 표면과 내부를 채울 입자 생성
-    ind_sp = sp * 0.8 # 인덴터는 조금 더 밀도 있게 생성
-    ix = np.arange(ind_center[0]-ind_radius, ind_center[0]+ind_radius, ind_sp)
-    iy = np.arange(ind_center[1]-ind_radius, ind_center[1]+ind_radius, ind_sp)
-    iz = np.arange(ind_center[2]-ind_radius, ind_center[2]+ind_radius, ind_sp)
-    IX, IY, IZ = np.meshgrid(ix, iy, iz, indexing='ij')
-    potential_ind_pos = np.stack([IX.flatten(), IY.flatten(), IZ.flatten()], axis=-1).astype(np.float32)
+    # 인덴터 표면과 내부를 채울 입자 간격 (엘라스토머보다 조밀하게)
+    ind_sp = spacing * 0.8 
     
-    # 구 형태 안에 있는 입자만 필터링
-    dists = np.linalg.norm(potential_ind_pos - ind_center, axis=1)
-    indenter_pos = potential_ind_pos[dists <= ind_radius]
-    
-    return elastomer_pos, indenter_pos
+    # 인덴터를 감싸는 가상의 박스(Bounding Box) 범위 계산
+    ind_min = ind_center - ind_radius
+    ind_nx = int((2.0 * ind_radius) / ind_sp) + 1
+    ind_ny = int((2.0 * ind_radius) / ind_sp) + 1
+    ind_nz = int((2.0 * ind_radius) / ind_sp) + 1
 
-def get_material_params(config):
-    E, nu = float(config['youngs_modulus']), float(config['poisson_ratio'])
-    mu = E / (2.0 * (1.0 + nu))
-    lam = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
-    return mu, lam
+    for i in range(ind_nx):
+        for j in range(ind_ny):
+            for k in range(ind_nz):
+                # 가상 박스 내의 입자 후보 좌표 계산
+                pos = ind_min + ind_sp * np.array([i, j, k])
+                
+                # 구의 중심으로부터의 거리가 반지름 이내인 경우만 입자로 생성
+                if np.linalg.norm(pos - ind_center) <= ind_radius:
+                    p = Particle()
+                    p.x = wp.vec3(*pos)
+                    # 인덴터의 초기 속도는 YAML 설정에 따라 Solver에서 업데이트될 수 있습니다.
+                    p.v = wp.vec3(*indenter_v) 
+                    p.F = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+                    p.C = wp.mat33(0.0)
+                    # 인덴터는 강체성을 위해 보통 엘라스토머보다 큰 질량을 부여합니다.
+                    p.mass = p_mass * 10.0 
+                    p.volume = p_volume
+                    p.mat_id = 1  # Rigid Indenter ID
+                    particles.append(p)
+                    
+    return particles

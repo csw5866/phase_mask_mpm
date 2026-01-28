@@ -1,112 +1,224 @@
 import warp as wp
-from .data_types import ParticleState
+import numpy as np
+from .data_types import Particle
 
 @wp.kernel
-def p2g_kernel(
-    p: wp.array(dtype=ParticleState),
-    grid_m: wp.array(dtype=wp.float32, ndim=3),
-    grid_v: wp.array(dtype=wp.vec3, ndim=3),
-    dx: wp.float32,
-    mu: wp.float32,
-    lam: wp.float32,
-    num_e: wp.int32
+def clear_grid(grid_v: wp.array(dtype=wp.vec3),
+               grid_m: wp.array(dtype=float)):
+    i = wp.tid()
+    grid_v[i] = wp.vec3(0.0, 0.0, 0.0)
+    grid_m[i] = 0.0
+
+
+@wp.kernel
+def p2g(
+    particles: wp.array(dtype=Particle),
+    grid_v: wp.array(dtype=wp.vec3),
+    grid_m: wp.array(dtype=float),
+    dx: float,
+    inv_dx: float,
+    dt: float,
+    mu: float,
+    lam: float,
+    nx: int,
+    ny: int,
+    nz: int,
 ):
-    tid = wp.tid()
-    inv_dx = 1.0 / dx
-    pos = p[tid].x
-    
-    stress_term = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-    
-    if tid < num_e:
-        F = p[tid].F
-        J = wp.determinant(F)
-        
-        # [블랙홀 방지 핵심] J가 0.6 이하로 떨어지지 않게 하여 발산 차단
-        # PDMS의 비압축성을 수치적으로 안정시키기 위한 장치입니다.
-        J_safe = wp.clamp(J, 0.6, 1.5) 
-        
-        inv_F_T = wp.transpose(wp.inverse(F))
-        
-        # Neo-Hookean Stress 안정화 버전
-        # ln(J) 항이 과도한 인력을 만들지 않도록 조절됨
-        P = mu * (F - inv_F_T) + lam * wp.log(J_safe) * inv_F_T
-        stress = (1.0 / J_safe) * (P * wp.transpose(F))
-        
-        # 그리드에 전달할 힘의 가중치 계산
-        volume = p[tid].vol * J_safe
-        stress_term = -1.0 * volume * stress * 4.0 * inv_dx * inv_dx
+    pid = wp.tid()
+    p = particles[pid]
 
-    # P2G Transfer 로직 (이하 동일하지만 안정성 강화)
-    rx, ry, rz = grid_m.shape[0], grid_m.shape[1], grid_m.shape[2]
-    base_i = wp.clamp(wp.int32(wp.floor(pos[0] * inv_dx - 0.5)), 0, rx - 3)
-    base_j = wp.clamp(wp.int32(wp.floor(pos[1] * inv_dx - 0.5)), 0, ry - 3)
-    base_k = wp.clamp(wp.int32(wp.floor(pos[2] * inv_dx - 0.5)), 0, rz - 3)
-    
-    fx = pos * inv_dx - wp.vec3(wp.float32(base_i), wp.float32(base_j), wp.float32(base_k))
-    v0, v1, v2 = wp.vec3(1.5)-fx, fx-wp.vec3(1.0), fx-wp.vec3(0.5)
-    
-    w_x = wp.vec3(0.5*v0[0]*v0[0], 0.75-v1[0]*v1[0], 0.5*v2[0]*v2[0])
-    w_y = wp.vec3(0.5*v0[1]*v0[1], 0.75-v1[1]*v1[1], 0.5*v2[1]*v2[1])
-    w_z = wp.vec3(0.5*v0[2]*v0[2], 0.75-v1[2]*v1[2], 0.5*v2[2]*v2[2])
+    # particle position in grid coordinates
+    xp = p.x * inv_dx
 
+    base = wp.vec3(
+        wp.floor(xp[0] - 0.5),
+        wp.floor(xp[1] - 0.5),
+        wp.floor(xp[2] - 0.5),
+    )
+
+    fx = xp - base
+
+    # quadratic B-spline weights
+    w = wp.mat33(0.0)
+    for d in range(3):          #tacchi 2.0 style과 다르게 [a,b] indexing에서 a가 dimensino을, b가 이웃한 grid의 index를 의미
+        x = fx[d]
+        w[d, 0] = 0.5 * (1.5 - x) * (1.5 - x)
+        w[d, 1] = 0.75 - (x - 1.0) * (x - 1.0)
+        w[d, 2] = 0.5 * (x - 0.5) * (x - 0.5)
+
+    # Neo-Hookean stress (corotated model 이용)
+    F = p.F
+    U = wp.mat33()
+    S = wp.vec3()  # Sigma: 3개의 부동소수점 값을 담는 벡터
+    V = wp.mat33()
+    wp.svd3(F,U,S,V)
+    J = S[0]*S[1]*S[2]
+
+    stress = 2.0 * mu * (F - U @ wp.transpose(V)) @ wp.transpose(F) + lam * J * (J-1.0) * wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+     #warp 문서상으로도 kirchoff_stress_FCR로 정의
+    stress = (-dt * p.volume * 4.0 * inv_dx * inv_dx) * stress
+
+    affine = stress + p.mass * p.C
+
+    # scatter to grid
     for i in range(3):
         for j in range(3):
             for k in range(3):
-                weight = w_x[i] * w_y[j] * w_z[k]
-                dpos = (wp.vec3(wp.float32(i), wp.float32(j), wp.float32(k)) - fx) * dx
-                mass_w = weight * p[tid].m
-                mom = mass_w * (p[tid].v + (p[tid].C * dpos))
+                weight = w[0, i] * w[1, j] * w[2, k]
+
+                node = wp.vec3(
+                    base[0] + float(i),
+                    base[1] + float(j),
+                    base[2] + float(k),
+                )
+
+                ix = int(node[0])
+                iy = int(node[1])
+                iz = int(node[2])
+
+                if ix < 0 or iy < 0 or iz < 0:
+                    continue
+                if ix >= nx or iy >= ny or iz >= nz:
+                    continue
+
+                idx = ix * ny * nz + iy * nz + iz       #grid의 index는 z -> y -> x순으로 차례대로 할당
+
+                dpos = (node - xp) * dx     #normalize 안 된 실제 물리적인 값
                 
-                wp.atomic_add(grid_m, base_i + i, base_j + j, base_k + k, mass_w)
-                wp.atomic_add(grid_v, base_i + i, base_j + j, base_k + k, mom + (stress_term * weight) * dpos)
+                wp.atomic_add(
+                    grid_v,
+                    idx,
+                    weight * (p.mass * p.v + affine @ dpos),
+                )
+                wp.atomic_add(
+                    grid_m,
+                    idx,
+                    weight * p.mass,
+                )
+
+
 
 @wp.kernel
-def grid_update_kernel(grid_m: wp.array(dtype=wp.float32, ndim=3), grid_v: wp.array(dtype=wp.vec3, ndim=3), dt: wp.float32, gravity: wp.vec3):
-    i, j, k = wp.tid()
-    m = grid_m[i, j, k]
-    if m > 1e-6:
-        v = grid_v[i, j, k] / m + gravity * dt
-        rx, ry, rz = grid_m.shape[0], grid_m.shape[1], grid_m.shape[2]
-        # 5면 고정 경계 조건 (단단히 고정)
-        if i < 3 or i > rx - 4 or j < 3 or k < 3 or k > rz - 4:
+def grid_update(grid_v: wp.array(dtype=wp.vec3),
+                grid_m: wp.array(dtype=float),
+                gravity: wp.vec3,
+                dt: float,
+                dx: float,
+                block_min : wp.vec3,
+                block_max : wp.vec3,
+                nx: int, ny: int, nz: int):
+
+    i = wp.tid()        # i = 0 ~ (dim - 1)
+    m = grid_m[i]
+    iz = i % nz
+    iy = (i // nz) % ny
+    ix = i // (nz*ny)           #ix, iy, iz는 normalize된 grid 위치(0~64 사이값)이고, i_xpos,i_ypos,i_zpos는 물리적 거리를 고려한 위치 (0~1사이값)
+
+    i_xpos = float(ix) * dx
+    i_ypos = float(iy) * dx
+    i_zpos = float(iz) * dx
+
+    if m > 1e-14:
+        v = grid_v[i] / m
+        v += dt * gravity
+        
+        if i_xpos <= block_min[0] or i_xpos >= block_max[0] or \
+           i_zpos <= block_min[2] or i_zpos >= block_max[2] or \
+           i_ypos <= block_min[1]:  #-y축 방향으로 indenter가 press하므로
             v = wp.vec3(0.0)
-        grid_v[i, j, k] = v
+        
+        '''
+        eps = 1e-6
+        if i_xpos < eps or i_xpos > 1.0 - eps or \
+        i_ypos < eps or i_ypos > 1.0 - eps or \
+        i_zpos < eps or i_zpos > 1.0 - eps:
+            v = wp.vec3(0.0)
+        '''
+    else: 
+        v = wp.vec3(0.0)
+
+    grid_v[i] = v
+
 
 @wp.kernel
-def g2p_kernel(p: wp.array(dtype=ParticleState), grid_v: wp.array(dtype=wp.vec3, ndim=3), dt: wp.float32, dx: wp.float32, num_e: wp.int32, v_rigid: wp.vec3):
-    tid = wp.tid()
-    if tid >= num_e: # 인덴터: 완벽한 강체 평행이동
-        p[tid].x = p[tid].x + v_rigid * dt
-        p[tid].v = v_rigid
-        p[tid].C = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        return
+def g2p(
+    particles: wp.array(dtype=Particle),
+    grid_v: wp.array(dtype=wp.vec3),
+    grid_m: wp.array(dtype=float),
+    indenter_v: wp.vec3,
+    dx: float,
+    inv_dx: float,
+    dt: float,
+    nx: int,
+    ny: int,
+    nz: int,
+):
+    pid = wp.tid()
+    p = particles[pid]
 
-    inv_dx = 1.0 / dx
-    pos = p[tid].x
-    rx, ry, rz = grid_v.shape[0], grid_v.shape[1], grid_v.shape[2]
-    base_i = wp.clamp(wp.int32(wp.floor(pos[0] * inv_dx - 0.5)), 0, rx - 3)
-    base_j = wp.clamp(wp.int32(wp.floor(pos[1] * inv_dx - 0.5)), 0, ry - 3)
-    base_k = wp.clamp(wp.int32(wp.floor(pos[2] * inv_dx - 0.5)), 0, rz - 3)
-    fx = pos * inv_dx - wp.vec3(wp.float32(base_i), wp.float32(base_j), wp.float32(base_k))
-    v0, v1, v2 = wp.vec3(1.5)-fx, fx-wp.vec3(1.0), fx-wp.vec3(0.5)
-    w_x = wp.vec3(0.5*v0[0]*v0[0], 0.75-v1[0]*v1[0], 0.5*v2[0]*v2[0])
-    w_y = wp.vec3(0.5*v0[1]*v0[1], 0.75-v1[1]*v1[1], 0.5*v2[1]*v2[1])
-    w_z = wp.vec3(0.5*v0[2]*v0[2], 0.75-v1[2]*v1[2], 0.5*v2[2]*v2[2])
+    xp = p.x * inv_dx
 
-    nv = wp.vec3(0.0); nC = wp.mat33(0.0)
-    for i in range(3):
-        for j in range(3):
-            for k in range(3):
-                weight = w_x[i] * w_y[j] * w_z[k]
-                gv = grid_v[base_i + i, base_j + j, base_k + k]
-                dpos = (wp.vec3(wp.float32(i), wp.float32(j), wp.float32(k)) - fx) * dx
-                nv += weight * gv
-                term = wp.mat33(gv[0]*dpos[0], gv[0]*dpos[1], gv[0]*dpos[2], gv[1]*dpos[0], gv[1]*dpos[1], gv[1]*dpos[2], gv[2]*dpos[0], gv[2]*dpos[1], gv[2]*dpos[2])
-                nC += term * (weight * 4.0 * inv_dx * inv_dx)
+    base = wp.vec3(
+        wp.floor(xp[0] - 0.5),
+        wp.floor(xp[1] - 0.5),
+        wp.floor(xp[2] - 0.5),
+    )
 
-    p[tid].v = nv
-    p[tid].C = nC
-    # CFL 가드: 한 프레임에 그리드 한 칸 이상 이동 절대 금지
-    limit = wp.vec3(dx * 0.5)
-    p[tid].x = p[tid].x + wp.min(wp.max(nv * dt, -limit), limit)
-    p[tid].F = (wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0) + nC * dt) * p[tid].F
+    fx = xp - base
+
+    # quadratic B-spline weights
+    w = wp.mat33(0.0)
+    for d in range(3):
+        x = fx[d]
+        w[d, 0] = 0.5 * (1.5 - x) * (1.5 - x)
+        w[d, 1] = 0.75 - (x - 1.0) * (x - 1.0)
+        w[d, 2] = 0.5 * (x - 0.5) * (x - 0.5)
+
+    new_v = wp.vec3(0.0, 0.0, 0.0)
+    new_C = wp.mat33(0.0)
+
+
+    if p.mat_id == 0:
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    weight = w[0, i] * w[1, j] * w[2, k]
+
+                    node = wp.vec3(
+                        base[0] + float(i),
+                        base[1] + float(j),
+                        base[2] + float(k),
+                    )
+
+                    ix = int(node[0])
+                    iy = int(node[1])
+                    iz = int(node[2])
+
+                    if ix < 0 or iy < 0 or iz < 0:
+                        continue
+                    if ix >= nx or iy >= ny or iz >= nz:
+                        continue
+
+                    idx = ix * ny * nz + iy * nz + iz
+
+                    if grid_m[idx] > 0.0:
+                        gv = grid_v[idx] 
+                        dpos = wp.vec3(float(i), float(j), float(k)) - fx
+
+                        new_v += weight * gv
+                        new_C += 4.0 * inv_dx * weight * wp.outer(gv, dpos)
+    elif p.mat_id == 1:
+        new_v = indenter_v
+
+
+    p.v = new_v
+    p.x += dt * new_v
+    p.C = new_C
+    # deformation gradient update
+    if p.mat_id == 0:
+        p.F = (wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0) + dt * new_C) @ p.F
+    elif p.mat_id == 1:
+        p.F = wp.mat33(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+
+    particles[pid] = p
