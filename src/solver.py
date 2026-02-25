@@ -16,9 +16,10 @@ class MPMSolver:
         self.block_min = np.array(cfg["block_min"])
         self.block_max = np.array(cfg["block_max"])
         self.dx = 1.0 / (self.nx - 1)     #self.nx = slef.ny = self.nz이고 domain은 정육면체 형태 ([0, 1.0]^3)
-        self.spacing = self.dx / 3
+        self.spacing = self.dx / 3          #indentation.yaml 대신 grid_res 기반 충분한 sampling이 가능하도록 조절
         self.inv_dx = 1.0 / self.dx
         self.indenter = cfg["indenter"]
+        self.profile = cfg["mla"]
         self.density = float(cfg["density"])
 
         E = float(cfg["E"])
@@ -31,6 +32,7 @@ class MPMSolver:
             self.block_max,
             self.spacing,
             self.density,
+            self.profile,
             self.indenter,
         )
 

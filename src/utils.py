@@ -44,12 +44,15 @@ def save_particle_frame(particles, step, out_dir="frames"):
     # 모든 입자를 한 번에 그립니다.
     # Matplotlib이 내부적으로 깊이 정렬을 시도합니다.
     # (MPM 좌표계 Y가 높이이므로, Matplotlib Z축에 Y값을 넣습니다.)
+    # utils.py 내의 시각화 부분 수정
     ax.scatter(x[:, 0], x[:, 2], x[:, 1], 
-               c=colors,      # 미리 계산된 색상 배열
-               s=0.5,         # 점 크기
-               alpha=1.0,     # 투명도
-               edgecolors='none')
-    # ------------------------
+            c=colors,               # 미리 계산된 색상 배열
+            s=1.2,                  # [팁1] 점 크기를 0.5에서 1.2~1.5 정도로 살짝 키웁니다.
+            marker='o',             # [팁2] 원형 마커임을 명시
+            alpha=0.9,              # 약간의 투명도는 입자들이 겹칠 때 입체감을 줍니다.
+            edgecolors='black',     # [팁3] 아주 얇은 검은색 테두리가 입자 하나하나를 구분해줍니다.
+            linewidths=0.05,        # 테두리 두께를 매우 얇게 설정 (입자 느낌 극대화)
+            depthshade=True)        # [팁4] 멀리 있는 입자를 어둡게 처리하여 공간감을 만듭니다.
 
     # 축 범위 고정
     ax.set_xlim(0, 1)
@@ -149,7 +152,7 @@ def save_height_map_3d(hmap, step, domain=(0, 1), out_dir="height_3d"):
     # [핵심 수정] vmin과 vmax를 명시하여 색상 범위를 고정합니다.
     # 엘라스토머의 기본 높이가 0.25이므로 0~0.5 범위가 적당합니다.
     VMIN = 0.1
-    VMAX = 0.26
+    VMAX = 0.3
     
     surf = ax.plot_surface(X, Z, display_hmap, cmap='viridis', 
                            vmin=VMIN, vmax=VMAX,  # 이 부분이 색상을 고정합니다.
@@ -210,7 +213,7 @@ def save_height_map_3d_with_indenter(particles, hmap, step, domain=(0, 1), out_d
     ax = fig.add_subplot(111, projection='3d')
     
     # 색상 범위 고정
-    VMIN, VMAX = 0.1, 0.26
+    VMIN, VMAX = 0.1, 0.3
     
     # 엘라스토머 표면 플롯
     surf = ax.plot_surface(X, Z, display_hmap, cmap='viridis', 
@@ -282,7 +285,7 @@ def save_height_map_3d_surface_indenter(particles, hmap, step, domain=(0, 1), ou
     ax = fig.add_subplot(111, projection='3d')
     
     # 색상 고정
-    VMIN, VMAX = 0.1, 0.26
+    VMIN, VMAX = 0.1, 0.3
     
     # [A] 엘라스토머 표면 그리기 (투명하게)
     surf = ax.plot_surface(X, Z, display_hmap, cmap='viridis', 

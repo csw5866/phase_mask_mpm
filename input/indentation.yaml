@@ -2,7 +2,7 @@
 device: "cpu"
 
 # [핵심] 고해상도 그리드 및 조밀한 입자 설정
-grid_res: [65, 65, 65]     # 65*65*65 grid 배치,간격은 1/(65-1) = 0.015625
+grid_res: [129, 129, 129]     # 65*65*65 grid 배치,간격은 1/(65-1) = 0.015625
 spacing: 0.01         # 입자 간격을 매우 좁혀서 밀도를 높임 (가장 중요) -> 현재 코드 상으로는 spacing 대신 grid_res 기반 dx에 3개씩 배치되도록 설계
 dt: 1e-4              # 입자가 작아진 만큼 타임스텝도 줄여야 안정적
 
@@ -18,9 +18,15 @@ density: 1000.0
 block_min: [0.3, 0.05, 0.3] # xz 평면에 배치되고 y방향으로 눌린다. (y방향기준 대략 12.8개의 grid가 포함됨)
 block_max: [0.7, 0.25, 0.7] # 블록 높이를 조금 낮춤
 
+#upper surface profile
+mla:
+  enabled: true 
+  grid_count: 16 # 8x8     #field는 geometry의 block의 XZ plane과 동일
+  radius: 0.0125
+
 # Indenter (Kinematic Rigid)
 indenter:
-  center: [0.5, 0.33, 0.5] # 블록 바로 위에서 시작
+  center: [0.5, 0.35, 0.5] # 블록 바로 위에서 시작
   radius: 0.08
   velocity: [0, -0.75, 0] # 적절한 속도로 압입
 
