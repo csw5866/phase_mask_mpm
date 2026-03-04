@@ -18,11 +18,18 @@ density: 1000.0
 block_min: [0.3, 0.05, 0.3] # xz 평면에 배치되고 y방향으로 눌린다. (y방향기준 대략 12.8개의 grid가 포함됨)
 block_max: [0.7, 0.25, 0.7] # 블록 높이를 조금 낮춤
 
-#upper surface profile
-mla:
-  enabled: true 
-  grid_count: 16 # 8x8     #field는 geometry의 block의 XZ plane과 동일
-  radius: 0.0125
+
+# indentation.yaml
+#cad_model:
+#  enabled: true
+  # main.py가 있는 폴더 기준 상대 경로
+#  path: "assets/my_sensor_model.stl"
+  # 모델이 너무 크거나 작을 때 조절 (mm -> m 변환 등)
+#  scale: 0.001 
+  # 모델을 블록 위(0.25)로 옮기기 위한 좌표
+#  offset: [0.5, 0.25, 0.5]
+
+stl_path: "input/square.stl"
 
 # Indenter (Kinematic Rigid)
 indenter:

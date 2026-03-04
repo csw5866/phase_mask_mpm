@@ -19,7 +19,7 @@ class MPMSolver:
         self.spacing = self.dx / 3          #indentation.yaml 대신 grid_res 기반 충분한 sampling이 가능하도록 조절
         self.inv_dx = 1.0 / self.dx
         self.indenter = cfg["indenter"]
-        self.profile = cfg["mla"]
+        self.stl_path = cfg["stl_path"]
         self.density = float(cfg["density"])
 
         E = float(cfg["E"])
@@ -28,11 +28,9 @@ class MPMSolver:
         self.lam = E * nu / ((1 + nu) * (1 - 2 * nu))
 
         parts = create_block(
-            self.block_min,
-            self.block_max,
+            self.stl_path,
             self.spacing,
             self.density,
-            self.profile,
             self.indenter,
         )
 

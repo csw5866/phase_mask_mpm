@@ -1,3 +1,4 @@
+import trimesh
 import numpy as np
 import warp as wp
 from .data_types import Particle
@@ -69,77 +70,43 @@ def create_block(block_min, block_max, spacing, density, ind_cfg):
 ''' 
 # 상단 코드는 flat_surface용!!
 
-def create_block(block_min, block_max, spacing, density, profile_cfg, ind_cfg):
+## rtree 갑ㄴ일 시 매우 오래 걸림(특히 mla구조의 경우 반구형태에 수만개의 trimesh가 존재하므로 더 오래걸림. -->> gpu이용 시 warp의 wp.Mesh객체의 wp.mesh_query_point 사용 시 빨리 끝낼 수 있음)
+
+
+def create_block(stl_path, spacing, density,ind_cfg):
+    # 1. STL 로드
+    mesh = trimesh.load(stl_path)
     
+    # 2. 입자가 생성될 후보 그리드 생성 (Bounding Box 기준)
+    min_bound, max_bound = mesh.bounds
+    x = np.arange(min_bound[0], max_bound[0], spacing)
+    y = np.arange(min_bound[1], max_bound[1], spacing)
+    z = np.arange(min_bound[2], max_bound[2], spacing)
+    grid = np.stack(np.meshgrid(x, y, z, indexing='ij'), axis=-1).reshape(-1, 3)
+    
+    # 3. [핵심] 메시 내부에 포함된 점들만 필터링
+    # trimesh의 contains 기능을 쓰면 균일 밀도가 보장됩니다.
+    inside = mesh.contains(grid)
+    final_points = grid[inside]
+    
+    # 4. 일관된 질량/부피 할당
     p_volume = spacing ** 3
     p_mass = density * p_volume
     
-    # 2. MLA 중심 좌표 미리 계산
-    mla_centers = []
-    if profile_cfg['enabled']:
-        N = profile_cfg['grid_count']
-        R = profile_cfg['radius']
-        x_start = block_min[0]
-        x_end = block_max[0]
-        z_start = block_min[2]
-        z_end = block_max[2]
-        
-        # 렌즈 간 간격이 딱 붙도록 배치
-        for i in range(N):
-            for j in range(N):
-                cx = x_start + R + (i * 2 * R)
-                cz = z_start + R + (j * 2 * R)
-                # 반구의 바닥면 중심은 블록의 상단면(b_max[1])
-                mla_centers.append(np.array([cx, block_max[1], cz]))
-
-    # 3. SDF 샘플링을 위한 전체 바운딩 박스 설정
-    scan_min = block_min
-    scan_max = block_max.copy()
-    if profile_cfg['enabled']:
-        scan_max[1] += profile_cfg['radius'] # 블록 높이 + 렌즈 반지름까지 스캔
-
-    nx = int((scan_max[0] - scan_min[0]) / spacing) + 1
-    ny = int((scan_max[1] - scan_min[1]) / spacing) + 1
-    nz = int((scan_max[2] - scan_min[2]) / spacing) + 1
-
     particles = []
-    
-    # 정규 격자 스캔 (Uniform Density 보장)
-    for i in range(nx):
-        for j in range(ny):
-            for k in range(nz):
-                pos = scan_min + spacing * np.array([i, j, k])
-                
-                is_inside = False
-                
-                # [SDF 1] 베이스 블록 내부 판정
-                if (block_min[0] <= pos[0] <= block_max[0] and 
-                    block_min[1] <= pos[1] <= block_max[1] and 
-                    block_min[2] <= pos[2] <= block_max[2]):
-                    is_inside = True
-                
-                # [SDF 2] MLA 반구 내부 판정
-                elif profile_cfg['enabled'] and pos[1] > block_max[1]:
-                    R = profile_cfg['radius']
-                    for center in mla_centers:
-                        # 구의 방정식 기반 SDF: ||p - c|| <= R
-                        dist = np.linalg.norm(pos - center)
-                        if dist <= R:
-                            is_inside = True
-                            break
-                
-                if is_inside:
-                    p = Particle()
-                    p.x = wp.vec3(*pos)
-                    p.v = wp.vec3(0.0, 0.0, 0.0)
-                    p.F = wp.mat33(1.0, 0.0, 0.0,
-                                   0.0, 1.0, 0.0,
-                                   0.0,0.0,1.0)# 항등 행렬 초기화 필수
-                    p.C = wp.mat33(0.0)
-                    p.mass = p_mass
-                    p.volume = p_volume
-                    p.mat_id = 0 # Elastomer
-                    particles.append(p)
+    for pos in final_points:
+        p = Particle() #
+        p.x = wp.vec3(*pos)
+        p.v = wp.vec3(0.0, 0.0, 0.0)
+        p.F = wp.mat33(1.0, 0.0, 0.0, 
+                       0.0, 1.0, 0.0,
+                       0.0, 0.0, 1.0)                
+        p.C = wp.mat33(0.0)
+        p.mass = p_mass
+        p.volume = p_volume
+        p.mat_id = 0
+
+        particles.append(p)
 
 # --- 2. Indenter Particles (mat_id: 1) ---
     ind_center = np.array(ind_cfg['center'])
@@ -174,5 +141,5 @@ def create_block(block_min, block_max, spacing, density, profile_cfg, ind_cfg):
                     p.volume = p_volume
                     p.mat_id = 1  # Rigid Indenter ID
                     particles.append(p)
-                    
+
     return particles
