@@ -1,0 +1,31 @@
+# Simulation Configuration
+device: "cuda:0"  # GPU 사용, CPU로 실행하려면 "cpu"로 변경
+dt: 5e-8             # 입자가 작아진 만큼 타임스텝도 줄여야 안정적
+steps: 2000
+gravity: [0, 0, 0]    # 실제로는 [0, -9.8, 0] (-y축 방향)
+pixel_size: 2.6e-6
+sampling: 3   #for grid arrangement
+
+#mask profile
+mask_path: "input/mla_heightmap_512.npy"
+profile_hmax: 5e-6  #mask_gen.py의 target_sag 값
+mask_thickness: 50.0e-6
+res: [512, 512]
+
+# Material (phase_mask, upper region 순)
+E: 1e5   # 밀도가 높아져서 강성을 조금 높여도 됨
+nu: 0.4   # 고무에 가까운 거동을 위해 높임 (비압축성 근사)
+density: 1000.0
+
+
+
+# Indenter (Kinematic Rigid)
+indenter:
+  center: [6.65e-4, 458.0e-6, 6.65e-4] # 블록 바로 위에서 시작
+  radius: 4.0e-4
+  velocity: [0, -0.2, 0] # 적절한 속도로 압입
+
+# Visualization
+output_dir: "output"
+save_gif: true
+show_window: true
