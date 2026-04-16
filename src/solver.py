@@ -24,20 +24,26 @@ class MPMSolver:
         self.Lx, self.Lz = (self.Nx - 1) * self.pixel_size, (self.Nz - 1) * self.pixel_size
         self.thickness = float(cfg["mask_thickness"])
         
+        # y- direction grid, height setting
         self.profile_hmax = float(cfg["profile_hmax"])
         h_tot = self.profile_hmax + self.thickness
         self.ny = int(h_tot * 2.0 * self.inv_dx) + 2
+        self.Ly = (self.ny - 1) * self.dx
         self.grid_size = self.nx * self.ny * self.nz
+        self.min_b = wp.vec3(0.0, 0.0, 0.0)
+        self.max_b = wp.vec3(self.Lx, self.Ly, self.Lz)
         
         E, nu = float(cfg["E"]), float(cfg["nu"])
         mu_val = E / (2.0 * (1.0 + nu))
         lam_val = E * nu / ((1.0 + nu) * (1.0 - 2.0 * nu))
         
-        self.ind_v = wp.vec3(*cfg["indenter"]["velocity"])
+        self.ind_v = wp.vec3(*cfg["ind_vel"])
         self.gravity = wp.vec3(*cfg["gravity"])
         self.step_count = 0
 
-        self.particles = create_block_gpu(self.Nx, self.Nz, h_tot, self.pixel_size, self.thickness, float(cfg["density"]), cfg["mask_path"], cfg["indenter"], self.device)
+        self.particles = create_block_gpu(self.Nx, self.Nz, h_tot, self.pixel_size, self.thickness, float(cfg["density"]), cfg["mask_path"], cfg["ind_path"],
+                                          self.min_b, self.max_b,
+                                          self.device)
         self.np = len(self.particles)
         
         with wp.ScopedDevice(self.device):
@@ -62,7 +68,7 @@ class MPMSolver:
         focal_length = Radius_of_curvature / (n_glass - 1)
         #####################################################################
 
-
+        '''
         if self.step_count == 0:    # 초기 시점에서 ASM 결과 확인 위한 시각화
                     hmap_el_gpu = wp.zeros(shape=(self.Nx, self.Nz), dtype=float, device=self.device)
                     hmap_in_gpu = wp.full(shape=(self.Nx, self.Nz), dtype=float, value=1e3, device=self.device)
@@ -79,7 +85,7 @@ class MPMSolver:
                     in_map[in_map > 10.0] = np.nan
                     print(el_map.min(), el_map.max(), in_map[np.isfinite(in_map)].min(), in_map[np.isfinite(in_map)].max())
 
-                    '''
+        ''' ### below 6 lines are not used
                     # 1. 리사이즈 전 블러링
                     #el_map_smoothed = ndimage.gaussian_filter(el_map, sigma=0.6)
 
@@ -87,7 +93,7 @@ class MPMSolver:
                     #refined_el = cv2.resize(el_map_smoothed, (self.Nx, self.Nz), interpolation=cv2.INTER_LANCZOS4)
                     #refined_ind = cv2.resize(in_map, (self.Nx, self.Nz), interpolation=cv2.INTER_LANCZOS4)
                     
-                    '''
+        '''
                     el_map_profile = el_map - self.thickness
                     if el_map_profile.max() > self.profile_hmax and el_map_profile.min() < 0:
                         print(f"Warning: Unexpected height values detected (max: {el_map_profile.max():.2e}, min: {el_map_profile.min():.2e})")
@@ -96,6 +102,7 @@ class MPMSolver:
                     save_visuals(el_map, in_map, self.step_count, self.pixel_size)
 
                     print(f"Step {self.step_count} completed, visuals saved.")
+        '''
 
 
         with wp.ScopedDevice(self.device):
